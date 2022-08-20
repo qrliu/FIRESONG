@@ -346,11 +346,12 @@ def get_LuminosityFunction(mean_luminosity, LF, **kwargs):
             # if only width is provided, use mean luminosity
             width = kwargs.get('pl_width')
             if alpha == 2:
-                lmin = mean_luminosity / (width*np.log(10))
+                #lmin = mean_luminosity / (width*np.log(10))
+                lmin = mean_luminosity * (1. - 10**(-width)) / (width * np.log(10))
             else:
                 lmin = (2.-alpha)/(1.-alpha)*mean_luminosity\
                         *(10**(width*(1.-alpha))-1)/(10**(width*(2.-alpha))-1)
-                lmax = lmin*10**width
+            lmax = lmin*10**width
         return PL_LuminosityFunction(Lmin=lmin, Lmax=lmax, alpha=alpha)
     if LF_type == "BPL":
         lmin = kwargs.get('bpl_lmin')
