@@ -36,6 +36,7 @@ def get_evolution(evol, **kwargs):
                   "YMKBH2008SFR": YukselEtAl2008StarFormationRate,
                   "CC2015SNR": CandelsClash2015SNRate,
                   "MD2014SFR": MadauDickinson2014CSFH,
+                  "HMS2005AGN": HMS2005AGN,
                   "PowerLaw": PowerLaw,
                   }
     if not evol in list(evolutions.keys()):
@@ -298,6 +299,24 @@ class MadauDickinson2014CSFH(Evolution):
 
     def __str__(self):
         return "Madau and Dickinson (2014)"
+
+class HMS2005AGN(Evolution):
+#    unit = M_sun/yr/Mpc^3 
+
+    def __call__(self,z):
+        return self.parametrization(1.+z)
+    
+    def parametrization(self, x):
+        a  = 5.0
+        z1 = 1.7
+        z2 = 2.7
+        if x <= z1+1.:
+           density = x**a
+        elif ((x > z1+1.) & (x <= z2+1.)):
+           density = (1.+z1)**a
+        else:
+           density = (1.+z1)**a*10**(2.7-x+1.)
+        return density        
 
 class SourcePopulation(object):
     """
