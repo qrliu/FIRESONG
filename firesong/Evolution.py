@@ -761,7 +761,6 @@ class LuminosityEvolution(object):
     Attributes:
         lmin (float): log10 of Minimum luminosity considered in erg/s
         lmax (float): log10 of Maximum luminosity considered in erg/s
-        _zlocal (float): Describes limit of nearby sources
         Mpc2cm (float): Conversion factor
         GeV_per_sec_2_ergs_per_year (float): Conversion factor
         cosmology (cosmo_distance instance)
@@ -774,7 +773,6 @@ class LuminosityEvolution(object):
         self.cosmology = cosmo_distance(**cosmology)
         self.lmin = lmin
         self.lmax = lmax
-        self._zlocal = 0.01
         self.Mpc2cm = 3.086e24                     # Mpc / cm
         self.GeV_per_sec_2_ergs_per_sec = 1.60218e-3  # (GeV/sec) / (ergs/s)
 
@@ -822,55 +820,6 @@ class LuminosityEvolution(object):
         return integral * self.cosmology.diff_comoving_volume(z) * \
             4*np.pi
 
-    def L_CDF(self, redshift_bins, luminosity_bins):
-        """
-        Creates a 2-dimensional cumulative distribution function
-        of the number of sources as a function of redshift and luminosity
-
-        Args:
-            redshift_bins (array): redshift bin-edges for evaluating the 
-                CDF
-            luminosity_bins (array): luminosity bin-edges for evaluating the 
-                CDF 
-
-        Attributes:
-            redshift_bins (array): redshift bin-edges for evaluating the 
-                CDF
-            luminosity_bins (array): luminosity bin-edges for evaluating the 
-                CDF
-            Lcdf (2d array): 2D CDF of number of sources vs. redshift and 
-                luminosity
-        """
-        # 2D phase space scan of L and z
-        l, z = np.meshgrid(luminosity_bins, redshift_bins)
-        L_PDF = self.LF(l, z)
-        L_CDF = np.cumsum(L_PDF, axis=1)
-        norm = L_CDF[:,-1].reshape((len(redshift_bins),1))
-        L_CDF = (1/norm) * L_CDF
-
-        self.redshift_bins = redshift_bins
-        self.luminosity_bins = luminosity_bins
-        self.Lcdf = L_CDF
-
-    def Luminosity_Sampling(self, z):
-        """
-        Samples luminosities of sources given their redshifts
-
-        Args:
-            z (array or float): redshift(s) of source(s)
-
-        Returns:
-            array or float: Sampled luminosities
-        """
-        lumi = []
-        z = np.atleast_1d(z)
-        test = np.random.rand(z.shape[0])
-        index_1 = np.searchsorted(self.redshift_bins, z)
-        for test, index in zip(test, index_1):
-            index_2 = np.searchsorted(self.Lcdf[index], test)
-            lumi.append(self.luminosity_bins[index_2])
-        return np.array(lumi)
-
     def Nsources(self, zmax):
         r"""
         Integrates full 2-dimensional source count distribution over 
@@ -899,7 +848,7 @@ class LuminosityEvolution(object):
         flux units are [GeV cm^-2 s^-1]
 
         Args:
-            luminosity (array or float): luminosity of sources in ergs/yr
+            luminosity (array or float): luminosity of sources in ergs/sec
             index (float): Spectral index of the flux
             emin (float): Minimum neutrino energy in GeV
             emax (float): Maximum neutrino energy in GeV
@@ -1021,4 +970,81 @@ class HardingAbazajian(LuminosityEvolution):
         """
         L_x_to_rad = 4.21           #model specific
         L = super(HardingAbazajian, self).Luminosity_Sampling(z)
-        return 10**(L+L_x_to_rad)
+        return 10**L_x_to_rad*L
+
+
+class Generic_LDDE(LuminosityEvolution):
+    def __init__(self, L_min, L_max, cosmology=cosmology,
+                 A=5.04, logL_ast=43.94, gamma1=0.86, gamma2=2.23, 
+                 p1=4.23, p2=-1.5, zc=1.9, logL_a=44.6, alpha=0.335, 
+                 PLE=False, PDE=False):
+        super().__init__(L_min, L_max, cosmology)
+        self.A = A*1e-6*self.cosmology.h**3
+        self.logL_ast = logL_ast-2.*np.log10(self.cosmology.h)
+        self.gamma1 = gamma1
+        self.gamma2 = gamma2
+        self.p1 = p1
+        self.p2 = p2
+        self.zc = zc
+        self.logL_a = logL_a-2.*np.log10(self.cosmology.h)
+        self.alpha = alpha
+        self.PLE = PLE
+        self.PDE = PDE
+
+    def HXLF(self, L):
+        '''
+        This is Equation 11 in ueda et al.
+        Verbatim: Representing the number density per unit comoving volume per 
+        log L_X
+        d Phi(L_X, z=0)/d log(L_X) = A*[(L_X/L_ast)^gamma1 + (L_X/L_ast)^gamma2]-1
+
+        but L in this function is log10(L_X)
+        '''
+
+        return self.A*((10**(L-self.logL_ast))**self.gamma1
+                       +(10**(L-self.logL_ast))**self.gamma2)**-1
+
+    def pure_ez(self, z):
+        '''
+        This is Equation 12 in ueda et al.
+        Evolution factor that depends only on z.
+        e(z) = (1+z)^p1                          (z<zc)
+             = (1+zc)^p1 * (1+z)^p2/(1+zc)^p2    (z>=zc)
+        '''
+
+        return np.piecewise(z, [z<self.zc, z>=self.zc], 
+                           [lambda x:(1+x)**self.p1, 
+                            lambda x:(1+self.zc)**self.p1*((1+x)/(1+self.zc))**self.p2])
+
+    def ez(self, z, L):
+        '''
+        This is equation 16
+        zc is a funciton of L
+        '''
+        z = np.atleast_1d(z)
+        L = np.atleast_1d(L)
+        zc = np.piecewise(L, [L>=self.logL_a, L<self.logL_a],
+                          [lambda x: self.zc, 
+                           lambda x: self.zc*(10**(x-self.logL_a))**self.alpha])
+
+        y = np.empty_like(z)
+        y[z>=zc] = (1+zc[z>=zc])**self.p1*((1+z[z>=zc])/(1+zc[z>=zc]))**self.p2
+        y[z<zc] = (1+z[z<zc])**self.p1
+
+        return y
+    
+    def LF(self, L, z):
+        if self.PLE:
+            return self.HXLF(L/self.pure_ez(z))
+        elif self.PDE:
+            return self.HXLF(L)*self.pure_ez(z)
+        
+        return self.HXLF(L)*self.ez(z, L)
+
+    def DiffuseScaling(self, fluxnorm, index, emin, emax, zmax, E0=1e5):
+        scale = fluxnorm / \
+            scipy.integrate.dblquad(lambda L,z: self.Lumi2Flux(10**L, index, emin, emax,z, E0)*\
+                                                self.LF(L,z)*self.cosmology.diff_comoving_volume(z),
+                                                0., zmax, self.lmin, self.lmax)[0]
+        self.A *= scale
+        return

@@ -22,7 +22,8 @@ def legend_simulation(outputdir,
                       L_Evolution="HA2012BL",
                       zmax=10.,
                       bins=10000,
-                      index=2.13,
+                      fluxnorm=1.44e-8,
+                      index=2.28,
                       emin=1e4,
                       emax=1e7,
                       lmin=38,
@@ -37,11 +38,12 @@ def legend_simulation(outputdir,
         outputdir (str or None): path to write output. If None, return results
             without writing a file
         filename (str): name of the output file. 
-        L_Evolution (str): Name of luminosity evolution model
+        L_Evolution (str): Name of luminosity evolution model, or object of 
+                           an evolution
         zmax (float, optional, default=10.): Farthest redshift to consider
         bins (int, optional, default=1000): Number of bins used when creating
             the redshift PDF
-        fluxnorm (float, optional, default=0.9e-8): Normalization on the total
+        fluxnorm (float, optional, default=1.44e-8): Normalization on the total
             astrophysical diffuse flux, E^2dPhi/dE. Units of GeV s^-1 sr^-1
         index (float, optional, default=2.13): Spectral index of diffuse flux
         emin (float, optional, default=1e4): Minimum neutrino energy in GeV
@@ -57,13 +59,19 @@ def legend_simulation(outputdir,
             as well as the sources. Only returned if filename is None
     """
 
-    LE_model = get_LEvolution(L_Evolution, lmin, lmax)
+    if type(L_Evolution) == str:
+        LE_model = get_LEvolution(L_Evolution, lmin, lmax)
+    else:
+        LE_model = L_Evolution
+    
+    if fluxnorm is not None:
+        LE_model.DiffuseScaling(fluxnorm, index, emin, emax, zmax)
 
-    N_sample = int(LE_model.Nsources(zmax))
+    N_sample = np.random.poisson(LE_model.Nsources(zmax))
 
     delta_gamma = 2 - index
     if verbose:
-        print_config_LEGEND(L_Evolution, lmin, lmax, N_sample)
+        print_config_LEGEND(L_Evolution, LE_model.lmin, LE_model.lmax, N_sample)
 
     ##################################################
     #        Simulation starts here
@@ -72,14 +80,15 @@ def legend_simulation(outputdir,
     rng = np.random.RandomState(seed)
 
     # Prepare CDF for redshift generation
-    redshift_bins = np.arange(0.0005, zmax, zmax / float(bins))
-    RedshiftPDF = [LE_model.RedshiftDistribution(redshift_bins[i])
-                   for i in range(0, len(redshift_bins))]
+    redshift_bins = np.linspace(0.0005, zmax, bins)
+    RedshiftPDF = [LE_model.RedshiftDistribution(z) for z in redshift_bins]
     invCDF = InverseCDF(redshift_bins, RedshiftPDF)
 
     # Prepare a luminosity CDF as a function of redshift
-    luminosity_bins = np.arange(lmin, lmax, (lmax - lmin) / 1000.)
-    LE_model.L_CDF(redshift_bins, luminosity_bins)
+    luminosity_bins = np.linspace(LE_model.lmin, LE_model.lmax, 1000)
+    l,z = np.meshgrid(luminosity_bins, redshift_bins)
+    L_PDF = LE_model.LF(l,z)
+    L_CDF = [InverseCDF(luminosity_bins, pdf) for pdf in L_PDF]
     
     if filename is not None:
         out = output_writer(outputdir, filename)
@@ -89,9 +98,9 @@ def legend_simulation(outputdir,
     # Generate redshift
     zs = invCDF(rng.uniform(low=0.0, high=1.0, size=N_sample))
     # Generate luminosity as function of z
-    lumis = LE_model.Luminosity_Sampling(zs)
-    if np.ndim(lumis) < 1:
-        lumis = np.array([lumis] * N_sample)
+    index_1 = np.searchsorted(redshift_bins, zs)
+    lumis = [10**L_CDF[idx](rng.uniform(0.0, 1.0))[0] for idx in index_1]
+    lumis = np.array(lumis)
     # Calculate the flux of each source
     fluxes = LE_model.Lumi2Flux(lumis, index, emin, emax, zs)
     # Random declination over the entire sky
@@ -99,7 +108,7 @@ def legend_simulation(outputdir,
     declins = np.degrees(np.arcsin(sinDecs))
     # Random ra over the sky
     ras = rng.uniform(0.,360., size=N_sample)
-    TotalFlux = np.sum(fluxes)
+    TotalFlux = np.sum(fluxes)/4./np.pi
 
     # Write out
     if filename is not None:
